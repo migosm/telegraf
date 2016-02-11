@@ -34,6 +34,8 @@ var fOutputFilters = flag.String("output-filter", "",
 	"filter the outputs to enable, separator is :")
 var fUsage = flag.String("usage", "",
 	"print usage for a plugin, ie, 'telegraf -usage mysql'")
+var fLogOutput = flag.String("log-output", "STDOUT",
+    "path to put logs, STDOUT by default")
 
 var fInputFiltersLegacy = flag.String("filter", "",
 	"filter the inputs to enable, separator is :")
@@ -63,6 +65,7 @@ The flags are:
   -usage             print usage for a plugin, ie, 'telegraf -usage mysql'
   -debug             print metrics as they're generated to stdout
   -quiet             run in quiet mode
+  -log-output        path to put logs
   -version           print the version to stdout
 
 Examples:
@@ -83,7 +86,39 @@ Examples:
   telegraf -config telegraf.conf -input-filter cpu:mem -output-filter influxdb
 `
 
+type LogFile struct {
+    filename string
+    fd *os.File
+}
+
+func (lf *LogFile) setLogOutput() (err error) {
+    if lf.fd != nil {
+        lf.fd.Close()
+    }
+    lf.fd, err = os.OpenFile(lf.filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+    if err != nil {
+        log.Fatalf("LogOutput: %s", err)
+    }
+    log.SetOutput(lf.fd)
+    return err
+}
+
+func (lf *LogFile) setSignalHandler() (err error) {
+    signals := make(chan os.Signal)
+    signal.Notify(signals, syscall.SIGUSR1)
+    go func() {
+        for {
+            <-signals    
+            lf.setLogOutput()
+        }
+    }()
+    return err
+}
+
+
 func main() {
+    logFile := LogFile{}
+    logFile.setSignalHandler()
 	reload := make(chan bool, 1)
 	reload <- true
 	for <-reload {
@@ -94,6 +129,11 @@ func main() {
 		if flag.NFlag() == 0 {
 			usageExit(0)
 		}
+
+        if *fLogOutput != "" {
+            logFile.filename = *fLogOutput
+            logFile.setLogOutput()
+        }
 
 		var inputFilters []string
 		if *fInputFiltersLegacy != "" {
@@ -203,16 +243,16 @@ func main() {
 		signals := make(chan os.Signal)
 		signal.Notify(signals, os.Interrupt, syscall.SIGHUP)
 		go func() {
-			sig := <-signals
-			if sig == os.Interrupt {
-				close(shutdown)
-			}
-			if sig == syscall.SIGHUP {
-				log.Printf("Reloading Telegraf config\n")
-				<-reload
-				reload <- true
-				close(shutdown)
-			}
+            sig := <-signals
+            if sig == os.Interrupt {
+                close(shutdown)
+            }
+            if sig == syscall.SIGHUP {
+                log.Printf("Reloading Telegraf config\n")
+                <-reload
+                reload <- true
+                close(shutdown)
+            }
 		}()
 
 		log.Printf("Starting Telegraf (version %s)\n", Version)
@@ -233,6 +273,7 @@ func main() {
 
 		ag.Run(shutdown)
 	}
+
 }
 
 func usageExit(rc int) {
