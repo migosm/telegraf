@@ -117,7 +117,7 @@ func (lf *LogFile) setSignalHandler() (err error) {
 
 
 func main() {
-    logFile := LogFile{}
+    logFile := &LogFile{}
     logFile.setSignalHandler()
 	reload := make(chan bool, 1)
 	reload <- true
